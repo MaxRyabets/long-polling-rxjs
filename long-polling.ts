@@ -1,80 +1,110 @@
-import { of, timer, Observable, from, throwError } from 'rxjs'; 
-import { 
+import { of, timer, Observable, from, throwError } from "rxjs";
+import {
   map,
   takeWhile,
-  catchError,
-  concatMap,
   tap,
   finalize,
-   } from 'rxjs/operators';
+  delay,
+  repeat,
+} from "rxjs/operators";
 
-interface Data {
-  id: number | string;
-  status?: string;
+interface Item {
+  id: number;
+  status: ItemStatusType;
+  context: any[];
 }
 
-let data :Data[] = [
-  {id: 1},
-  {id: 2},
-  {id: 3},
-  {id: 4}
-];
-
-const LIMIT_QUERY = 10;
-
-function backend(dataItems, limitQuery: number): Observable<Data> {
-  console.log('This is data from backend', dataItems);
-
-  if(!dataItems.length) {
-    return dataItems;
-  }
-
-  let randStatus: number;
-  let randomError = Math.round(1 + Math.random() * (3));
-
-  if(randomError == 1) {
-    return throwError(new Error('some request error!'));
-  }
-
-  return from(dataItems).pipe(
-    map( (item: Data): Data  => {
-      randStatus = Math.round(Math.random());
-      return randStatus ? {id: item.id, status: 'proccesing'} : {id: item.id, status: 'done'}
-    }),
-
-  )
+enum ItemStatusType {
+  Processing = "Processing",
+  Done = "Done"
 }
 
-function frontend(){
-  let limitQuery = 0;
-  let exit = false;
+const DELAY = 2000;
+const LIMIT_QUERY = 5;
 
-  let poll$ = timer(0, 2000).pipe(
-    takeWhile(() => (!exit && data.length > 0)),
-    tap(query => console.log("Query", query)),
-    concatMap(() => backend(data, limitQuery++)),
-    finalize(() => console.log('should stop'))
+function create(context: any[]): Observable<Item[]> {
+  const minNubmerElements = 1;
+  const maxNubmerElements = 5;
+
+  let randomItemsElements: number = Math.round(
+    minNubmerElements + Math.random() * maxNubmerElements
   );
 
-  poll$.subscribe( (items: Data) => {
-
-    if(data.length) {
-      data.map(obj => {
-        obj.status = obj.id === items.id ? items.status : '';
-      })
-      data = data.filter(item => item.status !== 'done');
-      console.log('This is data', items)
-    }
-
-    if(limitQuery > LIMIT_QUERY) {
-      exit = true;
-      console.log(`Error number of requests for more than ${LIMIT_QUERY}`)
-    }
-  },
-  err => {
-    console.error(err);
-  });
-  console.log('This is limit', limitQuery)
+  return of(
+    Array.from(new Array(randomItemsElements), () => {
+      return {
+        id: randomItemsElements--,
+        status: getRandomStatus(),
+        context: context
+      };
+    })
+  );
 }
 
-frontend();
+function get(ids: number[]): Observable<Item[]> {
+  return of(ids.map(item => ({
+    id: item,
+    status: ItemStatusType.Processing,
+    context: null
+  }))
+  ).pipe(
+    map(item => processingRequest(item))
+  );
+}
+
+function isItemStatusDone(element: Item, index: number, array: Item[]): boolean {
+  return element.status !== ItemStatusType.Processing;
+}
+
+function processingRequest(items): Item[] {
+  return items.map(item => ({
+      id: item.id,
+      status: getRandomStatus(),
+      context: null
+  }));
+}
+
+function getRandomStatus() {
+  return Math.round(Math.random()) ? ItemStatusType.Processing: ItemStatusType.Done
+}
+
+function init() {
+  create([]).subscribe(items => {
+    let result: Item[] = items.concat();
+    let tempItems: Item[] = items.filter(
+      item => item.status !== ItemStatusType.Done
+    );
+
+    let idsProcessing: number[];
+    const poll$ = of(tempItems).pipe(delay(DELAY));
+    console.log('item after create', tempItems);
+
+    poll$.pipe(
+      takeWhile((item) => item.every(isItemStatusDone) !== true),
+      tap(() => {
+        idsProcessing = tempItems.map(item => item.id);
+        
+        get(idsProcessing).pipe(
+          tap(item => {
+
+            item.filter(
+              elem => elem.status === ItemStatusType.Done
+            ).forEach(elemDone => {
+              result.map( elemResult => 
+                elemResult.id === elemDone.id ? elemResult.status = elemDone.status: elemResult);
+            });
+
+            tempItems = item.filter(elem => elem.status === ItemStatusType.Processing);
+
+            console.log('item after get', result);
+          })
+        ).subscribe()
+
+      }),
+      repeat(LIMIT_QUERY),
+      finalize(() => console.log("should stop"))
+    ).subscribe();
+  });
+}
+
+init();
